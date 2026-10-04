@@ -14,8 +14,13 @@
   .stage { display: flex; flex-direction: column; min-width: 0; }
   .stage-bar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
   .stage-bar .grow { flex: 1; }
-  .canvas { flex: 1; display: grid; place-items: center; padding: 16px; overflow: auto; }
-  .canvas svg { width: 100%; height: auto; max-height: 100%; box-shadow: 0 1px 3px rgba(0,0,0,.12); background: #fff; }
+  .canvas { flex: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+  .canvas.dragging { cursor: grabbing; }
+  .canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .zoom { display: flex; align-items: center; gap: 4px; }
+  .zoom output { min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .app.collapsed { grid-template-columns: minmax(0, 1fr) 0; }
+  .app.collapsed aside { display: none; }
   aside { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 4px 16px 24px; }
   h2 { font-size: 12px; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
   .row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; align-items: center; margin: 6px 0; }
@@ -34,7 +39,8 @@
   .preset svg { width: 44px; height: 30px; }
   .preset.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
   @media (max-width: 760px) {
-    .app { grid-template-columns: 1fr; height: auto; }
+    .app, .app.collapsed { grid-template-columns: 1fr; height: auto; }
+    .canvas { flex: none; height: 60vh; }
     aside { border-left: 0; border-top: 1px solid var(--line); }
   }
 </style>
@@ -45,10 +51,17 @@
     <div class="stage-bar">
       <strong>七世紀歐亞地圖</strong>
       <span class="grow"></span>
+      <div class="zoom">
+        <button id="zoomOut" title="縮小（Ctrl+−）">−</button>
+        <output id="zoomPct">100%</output>
+        <button id="zoomIn" title="放大（Ctrl+＋）">＋</button>
+        <button id="zoomFit" title="Ctrl+0">符合視窗</button>
+      </div>
+      <button id="togglePanel">隱藏面板</button>
       <button id="reset">恢復預設</button>
       <button id="export" class="primary">下載 SVG</button>
     </div>
-    <div class="canvas"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <div class="canvas" id="canvas"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
   </div>
   <aside id="panel"></aside>
 </div>
@@ -282,14 +295,14 @@ function capitalsSvg() {
 const svg = document.getElementById("map");
 function render() {
   const [x, y, w, h] = GEO.view, g = S.waterGray;
-  svg.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
-  svg.setAttribute("width", Math.round(w * 10));
-  svg.setAttribute("height", Math.round(h * 10));
+  setView();
   svg.innerHTML =
+    `<clipPath id="clip"><rect x="${x}" y="${y}" width="${w}" height="${h}"/></clipPath><g clip-path="url(#clip)">` +
     `<rect id="water" x="${x}" y="${y}" width="${w}" height="${h}" fill="rgb(${g},${g},${g})"/>` +
     `<path id="land" fill="#fff" stroke="#000" stroke-width="${S.coastStroke}" stroke-linejoin="round" stroke-linecap="round" fill-rule="evenodd" d="${coastD()}"/>` +
     `<g id="himalayas" fill="none" stroke="#000" stroke-width="${S.mtStroke}" stroke-linejoin="round" stroke-linecap="round">${mountainsSvg()}</g>` +
-    `<g id="capitals" stroke-linecap="round" stroke-linejoin="round">${capitalsSvg()}</g>`;
+    `<g id="capitals" stroke-linecap="round" stroke-linejoin="round">${capitalsSvg()}</g></g>` +
+    `<rect class="frame" x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#999" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
 }
 let pending = false;
 function update() { save(); syncPanel(); if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
@@ -358,7 +371,12 @@ function syncPanel() {
 
 document.getElementById("reset").onclick = () => { S = { ...DEFAULTS }; update(); };
 document.getElementById("export").onclick = () => {
-  const src = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+  const out = svg.cloneNode(true), [x, y, w, h] = GEO.view;
+  out.querySelector(".frame").remove();
+  out.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+  out.setAttribute("width", Math.round(w * 10));
+  out.setAttribute("height", Math.round(h * 10));
+  const src = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(out);
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([src], { type: "image/svg+xml" }));
   a.download = "eurasia-7th-century.svg";
@@ -366,7 +384,82 @@ document.getElementById("export").onclick = () => {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
 
+// --- zoom & pan (changes only the on-screen viewBox; export always uses the full map) ---
+const canvas = document.getElementById("canvas");
+const MIN_ZOOM = 0.5, MAX_ZOOM = 40;
+let vb = GEO.view.slice();
+function setView() {
+  svg.setAttribute("viewBox", vb.map(v => v.toFixed(3)).join(" "));
+  document.getElementById("zoomPct").textContent = Math.round(GEO.view[2] / vb[2] * 100) + "%";
+}
+function toMap(cx, cy) {
+  const p = svg.createSVGPoint(); p.x = cx; p.y = cy;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+function zoomAt(f, cx, cy) {
+  const w = Math.min(GEO.view[2] / MIN_ZOOM, Math.max(GEO.view[2] / MAX_ZOOM, vb[2] / f));
+  f = vb[2] / w;
+  const p = toMap(cx, cy);
+  vb = [p.x - (p.x - vb[0]) / f, p.y - (p.y - vb[1]) / f, vb[2] / f, vb[3] / f];
+  setView();
+}
+function zoomCenter(f) { const r = canvas.getBoundingClientRect(); zoomAt(f, r.left + r.width / 2, r.top + r.height / 2); }
+function pan(dx, dy) {  // screen pixels
+  const k = 1 / svg.getScreenCTM().a;
+  vb[0] += dx * k; vb[1] += dy * k;
+  setView();
+}
+function fit() { vb = GEO.view.slice(); setView(); }
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+  if (e.ctrlKey || e.metaKey) zoomAt(Math.exp(-e.deltaY * unit * 0.002), e.clientX, e.clientY);  // Ctrl+wheel and trackpad pinch
+  else if (e.shiftKey) pan(e.deltaY * unit, 0);
+  else pan(e.deltaX * unit, e.deltaY * unit);
+}, { passive: false });
+let drag = null;
+canvas.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  drag = { x: e.clientX, y: e.clientY };
+  canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add("dragging");
+});
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  pan(drag.x - e.clientX, drag.y - e.clientY);
+  drag = { x: e.clientX, y: e.clientY };
+});
+const endDrag = () => { drag = null; canvas.classList.remove("dragging"); };
+canvas.addEventListener("pointerup", endDrag);
+canvas.addEventListener("pointercancel", endDrag);
+canvas.addEventListener("dblclick", e => zoomAt(2, e.clientX, e.clientY));
+document.addEventListener("keydown", e => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key === "=" || e.key === "+") zoomCenter(1.25);
+  else if (e.key === "-") zoomCenter(0.8);
+  else if (e.key === "0") fit();
+  else return;
+  e.preventDefault();
+});
+document.getElementById("zoomIn").onclick = () => zoomCenter(1.25);
+document.getElementById("zoomOut").onclick = () => zoomCenter(0.8);
+document.getElementById("zoomFit").onclick = fit;
+
+// --- panel visibility ---
+const PANEL_STORE = "eurasia-map-panel";
+function setPanel(open) {
+  document.querySelector(".app").classList.toggle("collapsed", !open);
+  document.getElementById("togglePanel").textContent = open ? "隱藏面板" : "顯示面板";
+  try { localStorage.setItem(PANEL_STORE, open ? "open" : "closed"); } catch (e) {}
+}
+document.getElementById("togglePanel").onclick = () => setPanel(document.querySelector(".app").classList.contains("collapsed"));
+let panelOpen = true;
+try { panelOpen = localStorage.getItem(PANEL_STORE) !== "closed"; } catch (e) {}
+
 buildPanel();
+setPanel(panelOpen);
+setView();
 update();
 </script>
 </body>

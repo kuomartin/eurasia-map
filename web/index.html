@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>歐亞地圖調整器</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd; --accent: #1d1d1b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, "Noto Sans TC", sans-serif; }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: 100vh; }
+  .stage { display: flex; flex-direction: column; min-width: 0; }
+  .stage-bar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .stage-bar .grow { flex: 1; }
+  .canvas { flex: 1; display: grid; place-items: center; padding: 16px; overflow: auto; }
+  .canvas svg { width: 100%; height: auto; max-height: 100%; box-shadow: 0 1px 3px rgba(0,0,0,.12); background: #fff; }
+  aside { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 4px 16px 24px; }
+  h2 { font-size: 12px; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; font-weight: 600; }
+  .row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 44px; gap: 8px; align-items: center; margin: 6px 0; }
+  .row label { color: var(--ink); }
+  .row output { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; font-size: 12px; }
+  .row input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row select, .seed input { width: 100%; min-width: 0; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .check { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .check input { accent-color: var(--accent); }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover { border-color: var(--ink); }
+  button.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .seed { display: grid; grid-template-columns: 96px minmax(0, 1fr) 36px; gap: 8px; align-items: center; margin: 6px 0; }
+  .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .preset { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; font-size: 12px; }
+  .preset svg { width: 44px; height: 30px; }
+  .preset.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+  @media (max-width: 760px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    aside { border-left: 0; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <div class="stage-bar">
+      <strong>七世紀歐亞地圖</strong>
+      <span class="grow"></span>
+      <button id="reset">恢復預設</button>
+      <button id="export" class="primary">下載 SVG</button>
+    </div>
+    <div class="canvas"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  </div>
+  <aside id="panel"></aside>
+</div>
+<script src="geo.js"></script>
+<script>
+"use strict";
+const DEFAULTS = {
+  waterGray: 212, coastStroke: 0.4, simplify: 0.45, minArea: 0.15, wobbleAmp: 0.28, wobbleStep: 0.6, smooth: 2,
+  taiwanSimplify: 0.06, taiwanAmp: 0.05,
+  mtCount: 7, mtSize: 2.5, mtBack: true, mtSnow: true, mtClear: 0.4, mtStroke: 0.28,
+  capStyle: "dot", dotR: 1.1, ringR: 1.4, capIrregular: 0.08, capStroke: 0.3, capOvershoot: true, capHalo: true,
+  seedCoast: 7, seedMountains: 7, seedCapitals: 7,
+};
+const PRESETS = [
+  { name: "小圓點", v: { capStyle: "dot", dotR: 0.8, capIrregular: 0.08 } },
+  { name: "中圓點", v: { capStyle: "dot", dotR: 1.1, capIrregular: 0.08 } },
+  { name: "大圓點", v: { capStyle: "dot", dotR: 1.5, capIrregular: 0.1 } },
+  { name: "空心圓圈", v: { capStyle: "ring", ringR: 1.2, capStroke: 0.35, capIrregular: 0.06 } },
+  { name: "大圓圈", v: { capStyle: "ring", ringR: 1.7, capStroke: 0.4, capIrregular: 0.06 } },
+  { name: "圓點＋圓圈", v: { capStyle: "dotring", dotR: 0.6, ringR: 1.4, capStroke: 0.3, capIrregular: 0.06 } },
+];
+const CONTROLS = [
+  ["首都"],
+  ["presets"],
+  ["capStyle", "樣式", "select", [["dot", "圓點"], ["ring", "圓圈"], ["dotring", "圓點＋圓圈"]]],
+  ["dotR", "圓點半徑", "range", 0.3, 2.5, 0.05],
+  ["ringR", "圓圈半徑", "range", 0.6, 3, 0.05],
+  ["capStroke", "圓圈線寬", "range", 0.1, 0.8, 0.02],
+  ["capIrregular", "不規則度", "range", 0, 0.25, 0.01],
+  ["capOvershoot", "圓圈收筆超出起點（手繪感）", "check"],
+  ["capHalo", "白色底墊（遮住下方線條）", "check"],
+  ["海岸線"],
+  ["coastStroke", "線寬", "range", 0.1, 1, 0.02],
+  ["simplify", "簡化程度", "range", 0, 1.2, 0.05],
+  ["wobbleAmp", "抖動幅度", "range", 0, 0.8, 0.01],
+  ["wobbleStep", "抖動間距", "range", 0.2, 2, 0.05],
+  ["smooth", "圓滑次數", "range", 0, 4, 1],
+  ["minArea", "最小島嶼", "range", 0.03, 1.5, 0.01],
+  ["taiwanSimplify", "台灣簡化", "range", 0, 0.5, 0.01],
+  ["taiwanAmp", "台灣抖動", "range", 0, 0.4, 0.01],
+  ["waterGray", "水域灰階", "range", 160, 250, 1],
+  ["山脈"],
+  ["mtCount", "前排座數", "range", 3, 14, 1],
+  ["mtSize", "高度", "range", 1, 5, 0.1],
+  ["mtStroke", "線寬", "range", 0.1, 0.8, 0.02],
+  ["mtClear", "與首都間距", "range", 0, 3, 0.1],
+  ["mtBack", "後排山峰", "check"],
+  ["mtSnow", "雪線", "check"],
+  ["隨機種子（各自獨立，改一項不影響其他）"],
+  ["seedCoast", "海岸線", "seed"],
+  ["seedMountains", "山脈", "seed"],
+  ["seedCapitals", "首都", "seed"],
+];
+
+const STORE = "eurasia-map-settings";
+let S = { ...DEFAULTS };
+try { Object.assign(S, JSON.parse(localStorage.getItem(STORE) || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} };
+
+// --- geometry helpers -------------------------------------------------------
+function rng(seed) {  // mulberry32
+  let a = seed >>> 0;
+  const next = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  next.uniform = (lo, hi) => lo + (hi - lo) * next();
+  return next;
+}
+const f2 = v => v.toFixed(2);
+const ringD = pts => "M" + pts.map(p => f2(p[0]) + "," + f2(p[1])).join("L") + "Z";
+const lineD = pts => "M" + pts.map(p => f2(p[0]) + "," + f2(p[1])).join("L");
+
+function simplify(pts, tol) {  // Douglas–Peucker on an open polyline
+  if (tol <= 0 || pts.length < 3) return pts;
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop();
+    const [ax, ay] = pts[i], [bx, by] = pts[j];
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1e-9;
+    let best = -1, bi = -1;
+    for (let k = i + 1; k < j; k++) {
+      const d = Math.abs(dy * pts[k][0] - dx * pts[k][1] + bx * ay - by * ax) / len;
+      if (d > best) { best = d; bi = k; }
+    }
+    if (best > tol) { keep[bi] = 1; stack.push([i, bi], [bi, j]); }
+  }
+  return pts.filter((_, k) => keep[k]);
+}
+
+function resample(pts, step) {  // closed ring, evenly spaced points
+  const ring = pts.concat([pts[0]]);
+  const seg = []; let total = 0;
+  for (let i = 1; i < ring.length; i++) { const l = Math.hypot(ring[i][0] - ring[i - 1][0], ring[i][1] - ring[i - 1][1]); seg.push(l); total += l; }
+  const n = Math.max(12, Math.floor(total / step));
+  const out = []; let si = 0, acc = 0;
+  for (let k = 0; k < n; k++) {
+    const target = total * k / n;
+    while (si < seg.length - 1 && acc + seg[si] < target) { acc += seg[si]; si++; }
+    const t = seg[si] ? (target - acc) / seg[si] : 0;
+    out.push([ring[si][0] + (ring[si + 1][0] - ring[si][0]) * t, ring[si][1] + (ring[si + 1][1] - ring[si][1]) * t]);
+  }
+  return out;
+}
+
+function chaikin(pts, iters) {
+  for (let it = 0; it < iters; it++) {
+    const nxt = [];
+    for (let i = 0; i < pts.length; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length];
+      nxt.push([0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1], [0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1]);
+    }
+    pts = nxt;
+  }
+  return pts;
+}
+
+function wobble(pts, step, amp, R) {
+  const waves = [0, 1, 2].map(() => [R.uniform(0.15, 0.6), R.uniform(0, 2 * Math.PI), R.uniform(0.4, 1)]);
+  if (amp <= 0) return pts;
+  const p = resample(pts, step), n = p.length;
+  return p.map(([x, y], i) => {
+    const [ax, ay] = p[(i - 1 + n) % n], [bx, by] = p[(i + 1) % n];
+    const dx = bx - ax, dy = by - ay, d = Math.hypot(dx, dy) || 1;
+    const off = amp * waves.reduce((s, [f, ph, w]) => s + w * Math.sin(f * i * step + ph), 0) / 2;
+    return [x - dy / d * off, y + dx / d * off];
+  });
+}
+
+function strokeRing(ring, tol, step, amp, smooth, R) {
+  let pts = ring.slice(0, -1);
+  pts = simplify(ring, tol).slice(0, -1);
+  if (pts.length < 3) pts = ring.slice(0, -1);
+  return ringD(chaikin(wobble(pts, step, amp, R), smooth));
+}
+
+// --- layers -----------------------------------------------------------------
+function coastD() {
+  const R = rng(S.seedCoast);
+  const out = [];
+  for (const poly of GEO.land) {
+    const R2 = rng(Math.floor(R() * 2 ** 32));  // one stream per polygon, so the island filter doesn't reshuffle others
+    if (poly.area < S.minArea && !poly.detailed) continue;
+    const tol = poly.detailed ? S.taiwanSimplify : S.simplify;
+    const amp = poly.detailed ? S.taiwanAmp : S.wobbleAmp;
+    const step = poly.detailed ? Math.min(S.wobbleStep, 0.25) : S.wobbleStep;
+    for (const ring of poly.rings) out.push(strokeRing(ring, tol, step, amp, S.smooth, R2));
+  }
+  return out.join("");
+}
+
+function capRadius() { return S.capStyle === "dot" ? S.dotR : S.ringR + S.capStroke / 2; }
+
+function spineAt(f) {
+  const s = GEO.spine, x = f * (s.length - 1), i = Math.min(s.length - 2, Math.floor(x)), t = x - i;
+  return [s[i][0] + (s[i + 1][0] - s[i][0]) * t, s[i][1] + (s[i + 1][1] - s[i][1]) * t];
+}
+
+function mountainsSvg() {
+  const R = rng(S.seedMountains), k = S.mtSize / 2.5, items = [];
+  const front = [];
+  for (let i = 0; i < S.mtCount; i++) {
+    const [x, y] = spineAt((i + 0.5) / S.mtCount);
+    front.push([x + R.uniform(-0.4, 0.4) * k, y + 0.6 * k, S.mtSize * R.uniform(0.88, 1.12), R()]);
+  }
+  items.push(...front);
+  if (S.mtBack) for (let i = 0; i + 1 < S.mtCount; i++) {
+    const [x, y] = spineAt((i + 1) / S.mtCount);
+    items.push([x + R.uniform(-0.3, 0.3) * k, y - 1.2 * k, S.mtSize * 0.78 * R.uniform(0.9, 1.1), R()]);
+  }
+  const avoid = GEO.capitals.map(c => c.xy), cr = capRadius();
+  const shown = items.filter(([x, y, h]) => avoid.every(([ax, ay]) => Math.hypot(x - ax, y - h / 2 - ay) > h + cr + S.mtClear));
+  shown.sort((a, b) => a[1] - b[1]);
+  return shown.map(([x, y, h, seed]) => mountain(x, y, h, rng(Math.floor(seed * 2 ** 32)))).join("");
+}
+
+function mountain(x, y, h, R) {
+  const w = h * R.uniform(0.85, 1.05);
+  const px = x + R.uniform(-0.12, 0.12) * w, py = y - h, lx = x - w, rx = x + w;
+  const body = `M${f2(lx)},${f2(y)}Q${f2((lx + px) / 2 + 0.08 * h)},${f2((y + py) / 2 - 0.05 * h)} ${f2(px)},${f2(py)}` +
+               `Q${f2((rx + px) / 2 - 0.08 * h)},${f2((y + py) / 2 - 0.05 * h)} ${f2(rx)},${f2(y)}`;
+  let snow = "";
+  if (S.mtSnow) {
+    const t = R.uniform(0.32, 0.4);
+    const ax = px + (lx - px) * t, ay = py + h * t, bx = px + (rx - px) * t;
+    snow = `M${f2(ax)},${f2(ay)}L${f2(ax + (bx - ax) * 0.3)},${f2(ay + 0.22 * h)}L${f2(ax + (bx - ax) * 0.55)},${f2(ay + 0.06 * h)}` +
+           `L${f2(ax + (bx - ax) * 0.78)},${f2(ay + 0.2 * h)}L${f2(bx)},${f2(ay)}`;
+  }
+  return `<path fill="#fff" stroke="none" d="${body}Z"/><path d="${body}${snow}"/>`;
+}
+
+function blob(x, y, r, irr, ph) {  // slightly uneven closed outline
+  const pts = [];
+  for (let i = 0; i < 32; i++) {
+    const a = 2 * Math.PI * i / 32;
+    const rr = r * (1 + irr * (Math.sin(2 * a + ph[0]) + 0.6 * Math.sin(3 * a + ph[1])) / 1.6);
+    pts.push([x + rr * Math.cos(a), y + rr * Math.sin(a)]);
+  }
+  return pts;
+}
+
+function capitalSvg(x, y, R, o = S) {
+  const ph = [R.uniform(0, 6.283), R.uniform(0, 6.283), R.uniform(0, 6.283)];
+  let s = "";
+  const hasRing = o.capStyle !== "dot", hasDot = o.capStyle !== "ring";
+  const outer = hasRing ? o.ringR + o.capStroke / 2 : o.dotR;
+  if (o.capHalo) s += `<path fill="#fff" stroke="none" d="${ringD(blob(x, y, outer + 0.35, 0, ph))}"/>`;
+  if (hasRing) {
+    const a0 = ph[2], turn = 2 * Math.PI * (o.capOvershoot ? 1.12 : 1), n = 48, pts = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + turn * i / n;
+      const rr = o.ringR * (1 + o.capIrregular * (Math.sin(2 * a + ph[0]) + 0.6 * Math.sin(3 * a + ph[1])) / 1.6) * (o.capOvershoot ? 1 + 0.06 * i / n : 1);
+      pts.push([x + rr * Math.cos(a), y + rr * Math.sin(a)]);
+    }
+    s += `<path fill="none" stroke="#000" stroke-width="${o.capStroke}" d="${o.capOvershoot ? lineD(pts) : ringD(pts.slice(0, -1))}"/>`;
+  }
+  if (hasDot) s += `<path fill="#000" stroke="none" d="${ringD(blob(x, y, o.dotR, o.capIrregular * 1.4, [ph[1], ph[2]]))}"/>`;
+  return s;
+}
+
+function capitalsSvg() {
+  const R = rng(S.seedCapitals);
+  return GEO.capitals.map(c => capitalSvg(c.xy[0], c.xy[1], rng(Math.floor(R() * 2 ** 32)))).join("");
+}
+
+// --- render -----------------------------------------------------------------
+const svg = document.getElementById("map");
+function render() {
+  const [x, y, w, h] = GEO.view, g = S.waterGray;
+  svg.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+  svg.setAttribute("width", Math.round(w * 10));
+  svg.setAttribute("height", Math.round(h * 10));
+  svg.innerHTML =
+    `<rect id="water" x="${x}" y="${y}" width="${w}" height="${h}" fill="rgb(${g},${g},${g})"/>` +
+    `<path id="land" fill="#fff" stroke="#000" stroke-width="${S.coastStroke}" stroke-linejoin="round" stroke-linecap="round" fill-rule="evenodd" d="${coastD()}"/>` +
+    `<g id="himalayas" fill="none" stroke="#000" stroke-width="${S.mtStroke}" stroke-linejoin="round" stroke-linecap="round">${mountainsSvg()}</g>` +
+    `<g id="capitals" stroke-linecap="round" stroke-linejoin="round">${capitalsSvg()}</g>`;
+}
+let pending = false;
+function update() { save(); syncPanel(); if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; render(); }); } }
+
+// --- panel ------------------------------------------------------------------
+const panel = document.getElementById("panel");
+const inputs = {};
+function presetPreview(v) {
+  const o = { ...S, ...v, capHalo: false };
+  return `<svg viewBox="-3 -2 6 4"><rect x="-3" y="-2" width="6" height="4" fill="#fff"/>${capitalSvg(0, 0, rng(3), o)}</svg>`;
+}
+function buildPanel() {
+  for (const c of CONTROLS) {
+    if (c.length === 1 && c[0] !== "presets") { panel.insertAdjacentHTML("beforeend", `<h2>${c[0]}</h2>`); continue; }
+    if (c[0] === "presets") {
+      const box = document.createElement("div"); box.className = "presets"; box.id = "presets";
+      PRESETS.forEach((p, i) => {
+        const b = document.createElement("button"); b.className = "preset"; b.dataset.i = i;
+        b.innerHTML = presetPreview(p.v) + `<span>${p.name}</span>`;
+        b.onclick = () => { Object.assign(S, p.v); update(); };
+        box.appendChild(b);
+      });
+      panel.appendChild(box); continue;
+    }
+    const [key, label, type, ...a] = c;
+    const row = document.createElement("div");
+    if (type === "range") {
+      row.className = "row";
+      row.innerHTML = `<label for="${key}">${label}</label><input id="${key}" type="range" min="${a[0]}" max="${a[1]}" step="${a[2]}"><output></output>`;
+      const inp = row.querySelector("input");
+      inp.oninput = () => { S[key] = +inp.value; update(); };
+    } else if (type === "select") {
+      row.className = "row";
+      row.innerHTML = `<label for="${key}">${label}</label><select id="${key}">${a[0].map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select><span></span>`;
+      const inp = row.querySelector("select");
+      inp.onchange = () => { S[key] = inp.value; update(); };
+    } else if (type === "check") {
+      row.className = "check";
+      row.innerHTML = `<input id="${key}" type="checkbox"><label for="${key}">${label}</label>`;
+      const inp = row.querySelector("input");
+      inp.onchange = () => { S[key] = inp.checked; update(); };
+    } else if (type === "seed") {
+      row.className = "seed";
+      row.innerHTML = `<label for="${key}">${label}</label><input id="${key}" type="number" min="0" step="1"><button title="換一組">🎲</button>`;
+      const inp = row.querySelector("input");
+      inp.oninput = () => { S[key] = Math.max(0, Math.floor(+inp.value || 0)); update(); };
+      row.querySelector("button").onclick = () => { S[key] = Math.floor(Math.random() * 100000); update(); };
+    }
+    inputs[key] = row;
+    panel.appendChild(row);
+  }
+}
+function syncPanel() {
+  for (const [key, row] of Object.entries(inputs)) {
+    const inp = row.querySelector("input, select");
+    if (inp.type === "checkbox") inp.checked = !!S[key]; else if (document.activeElement !== inp) inp.value = S[key];
+    const out = row.querySelector("output"); if (out) out.textContent = S[key];
+  }
+  const show = { dotR: S.capStyle !== "ring", ringR: S.capStyle !== "dot", capStroke: S.capStyle !== "dot", capOvershoot: S.capStyle !== "dot" };
+  for (const [k, v] of Object.entries(show)) inputs[k].style.display = v ? "" : "none";
+  document.querySelectorAll(".preset").forEach(b => {
+    const v = PRESETS[b.dataset.i].v;
+    b.classList.toggle("on", Object.entries(v).every(([k, x]) => S[k] === x));
+  });
+}
+
+document.getElementById("reset").onclick = () => { S = { ...DEFAULTS }; update(); };
+document.getElementById("export").onclick = () => {
+  const src = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(svg);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([src], { type: "image/svg+xml" }));
+  a.download = "eurasia-7th-century.svg";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+buildPanel();
+update();
+</script>
+</body>
+</html>

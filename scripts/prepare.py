@@ -55,10 +55,11 @@ def main():
     land = land_union().intersection(crop.buffer(3))
     polys = []
     for p in getattr(land, "geoms", [land]):
-        if p.area < 0.03 or in_box_xy(p, TAIWAN_BOX):
+        # Islets under 0.15 (only Bornholm here) are specks at this scale; Taiwan is replaced below
+        if p.area < 0.15 or in_box_xy(p, TAIWAN_BOX):
             continue
-        polys.append({"area": round(p.area, 3), "rings": [ring(p.exterior.coords)] + [ring(i.coords) for i in p.interiors]})
-    polys.append({"area": round(Polygon(t := taiwan()).area, 3), "rings": [t], "detailed": True})
+        polys.append({"rings": [ring(p.exterior.coords)] + [ring(i.coords) for i in p.interiors]})
+    polys.append({"rings": [taiwan()], "detailed": True})
     geo = {
         "view": [round(v, 3) for v in (X0, Y0, X1 - X0, Y1 - Y0)],
         "land": polys,

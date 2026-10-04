@@ -10,11 +10,10 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, "Noto Sans TC", sans-serif; }
-  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: 100vh; }
-  .stage { display: flex; flex-direction: column; min-width: 0; }
-  .stage-bar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .app { display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
+  .stage-bar { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
   .stage-bar .grow { flex: 1; }
-  .canvas { flex: 1; position: relative; overflow: hidden; cursor: grab; touch-action: none; }
+  .canvas { position: relative; min-width: 0; overflow: hidden; cursor: grab; touch-action: none; }
   .canvas.dragging { cursor: grabbing; }
   .canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .zoom { display: flex; align-items: center; gap: 4px; }
@@ -40,29 +39,28 @@
   .preset.on { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
   @media (max-width: 760px) {
     .app, .app.collapsed { grid-template-columns: 1fr; height: auto; }
-    .canvas { flex: none; height: 60vh; }
+    .app { grid-template-rows: auto; }
+    .canvas { height: 60vh; }
     aside { border-left: 0; border-top: 1px solid var(--line); }
   }
 </style>
 </head>
 <body>
 <div class="app">
-  <div class="stage">
-    <div class="stage-bar">
-      <strong>七世紀歐亞地圖</strong>
-      <span class="grow"></span>
-      <div class="zoom">
-        <button id="zoomOut" title="縮小（Ctrl+−）">−</button>
-        <output id="zoomPct">100%</output>
-        <button id="zoomIn" title="放大（Ctrl+＋）">＋</button>
-        <button id="zoomFit" title="Ctrl+0">符合視窗</button>
-      </div>
-      <button id="togglePanel">隱藏面板</button>
-      <button id="reset">恢復預設</button>
-      <button id="export" class="primary">下載 SVG</button>
+  <div class="stage-bar">
+    <strong>七世紀歐亞地圖</strong>
+    <span class="grow"></span>
+    <div class="zoom">
+      <button id="zoomOut" title="縮小（Ctrl+−）">−</button>
+      <output id="zoomPct">100%</output>
+      <button id="zoomIn" title="放大（Ctrl+＋）">＋</button>
+      <button id="zoomFit" title="Ctrl+0">符合視窗</button>
     </div>
-    <div class="canvas" id="canvas"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
+    <button id="togglePanel">隱藏面板</button>
+    <button id="reset">恢復預設</button>
+    <button id="export" class="primary">下載 SVG</button>
   </div>
+  <div class="canvas" id="canvas"><svg id="map" xmlns="http://www.w3.org/2000/svg"></svg></div>
   <aside id="panel"></aside>
 </div>
 <script src="geo.js"></script>

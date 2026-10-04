@@ -9,7 +9,7 @@ scripts/fetch-data.sh          # 下載來源資料到 data/
 uv run scripts/prepare.py      # 產生 web/geo.js
 ```
 
-用瀏覽器開啟 `web/index.html`，即可即時調整首都圖示、海岸線、山脈，再按「下載 SVG」匯出。設定存在瀏覽器裡，重新開啟時會保留。
+用瀏覽器開啟 `web/index.html`，即可即時調整首都圖示、海岸線、河流、山脈，再按「下載 SVG」匯出。設定存在瀏覽器裡，重新開啟時會保留。
 
 `maps/eurasia-7th-century.svg` 是目前定稿的地圖，由 `scripts/build2.py` 產生；換成新版時把匯出的 SVG 覆蓋上去再 commit。
 
@@ -18,6 +18,7 @@ uv run scripts/prepare.py      # 產生 web/geo.js
 - 底圖：Wikimedia Commons〈Afro-Eurasia location map with borders.svg〉，公有領域。等距圓柱投影，邊界取自 Wikipedia 的 Module:Location map/data/Afro-Eurasia（經度 −25.65～180、緯度 90～−48.15），首都依經緯度換算座標。
 - 台灣：底圖的台灣只有幾個頂點，改用 Natural Earth 1:10m land，公有領域。
 - 喜瑪拉雅山脈位置：Natural Earth 1:50m geography regions 的 HIMALAYAS 多邊形。
+- 長江、黃河：Natural Earth 1:50m rivers + lake centerlines（從 GitHub 上的 nvkelso/natural-earth-vector 取得，naciscdn 下載常逾時）。河道是現代河道；七世紀的黃河下游與長江口位置略有不同，在這個比例尺下差異不明顯。河口一律延伸到海岸線外，再由編輯器裁切在陸地範圍內，所以河口會接上海岸線。
 
 ## 每個部分各有獨立的隨機種子
 

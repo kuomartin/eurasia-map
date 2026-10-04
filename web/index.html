@@ -27,6 +27,7 @@
   .row output { font-variant-numeric: tabular-nums; color: var(--muted); text-align: right; font-size: 12px; }
   .row input[type=range] { width: 100%; accent-color: var(--accent); }
   .row select, .seed input { width: 100%; min-width: 0; font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .row input[type=color] { width: 100%; height: 26px; padding: 1px 2px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
   .check { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
   .check input { accent-color: var(--accent); }
   button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
@@ -69,6 +70,7 @@
 const DEFAULTS = {
   waterGray: 212, coastStroke: 0.4, simplify: 0.45, wobbleAmp: 0.28, wobbleStep: 0.6, smooth: 2,
   taiwanSimplify: 0.06, taiwanAmp: 0.05, taiwanStep: 0.25, taiwanSmooth: 2,
+  yangtze: true, yellow: true, riverColor: "#000000", riverWidth: 0.3,
   mtCount: 7, mtSize: 2.5, mtBack: true, mtSnow: true, mtClear: 0.4, mtStroke: 0.28,
   capStyle: "dot", dotR: 1.1, ringR: 1.4, capIrregular: 0.08, capStroke: 0.3, capOvershoot: true, capHalo: true,
   seedCoast: 7, seedMountains: 7, seedCapitals: 7,
@@ -103,6 +105,11 @@ const CONTROLS = [
   ["taiwanAmp", "抖動幅度", "range", 0, 0.8, 0.01],
   ["taiwanStep", "抖動間距", "range", 0.1, 2, 0.05],
   ["taiwanSmooth", "圓滑次數", "range", 0, 5, 1],
+  ["河流"],
+  ["yangtze", "長江", "check"],
+  ["yellow", "黃河", "check"],
+  ["riverColor", "顏色", "color"],
+  ["riverWidth", "粗細", "range", 0.05, 1.2, 0.01],
   ["山脈"],
   ["mtCount", "前排座數", "range", 3, 14, 1],
   ["mtSize", "高度", "range", 1, 5, 0.1],
@@ -163,6 +170,19 @@ function resample(pts, step) {  // closed ring, evenly spaced points
     out.push([ring[si][0] + (ring[si + 1][0] - ring[si][0]) * t, ring[si][1] + (ring[si + 1][1] - ring[si][1]) * t]);
   }
   return out;
+}
+
+function chaikinOpen(pts, iters) {  // keeps both endpoints
+  for (let it = 0; it < iters; it++) {
+    const nxt = [pts[0]];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const [x0, y0] = pts[i], [x1, y1] = pts[i + 1];
+      nxt.push([0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1], [0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1]);
+    }
+    nxt.push(pts[pts.length - 1]);
+    pts = nxt;
+  }
+  return pts;
 }
 
 function chaikin(pts, iters) {
@@ -290,15 +310,23 @@ function capitalsSvg() {
   return GEO.capitals.map(c => capitalSvg(c.xy[0], c.xy[1], rng(Math.floor(R() * 2 ** 32)))).join("");
 }
 
+// Rivers are clipped to the drawn land, so their mouths always meet the (wobbled) coastline
+function riversSvg() {
+  return ["yangtze", "yellow"].filter(k => S[k]).map(k => `<path d="${lineD(chaikinOpen(GEO.rivers[k], 1))}"/>`).join("");
+}
+
 // --- render -----------------------------------------------------------------
 const svg = document.getElementById("map");
 function render() {
-  const [x, y, w, h] = GEO.view, g = S.waterGray;
+  const [x, y, w, h] = GEO.view, g = S.waterGray, coast = coastD();
   setView();
   svg.innerHTML =
     `<clipPath id="clip"><rect x="${x}" y="${y}" width="${w}" height="${h}"/></clipPath><g clip-path="url(#clip)">` +
     `<rect id="water" x="${x}" y="${y}" width="${w}" height="${h}" fill="rgb(${g},${g},${g})"/>` +
-    `<path id="land" fill="#fff" stroke="#000" stroke-width="${S.coastStroke}" stroke-linejoin="round" stroke-linecap="round" fill-rule="evenodd" d="${coastD()}"/>` +
+    `<clipPath id="landclip"><path clip-rule="evenodd" d="${coast}"/></clipPath>` +
+    `<path id="land" fill="#fff" stroke="none" fill-rule="evenodd" d="${coast}"/>` +
+    `<g id="rivers" clip-path="url(#landclip)" fill="none" stroke="${S.riverColor}" stroke-width="${S.riverWidth}" stroke-linejoin="round" stroke-linecap="round">${riversSvg()}</g>` +
+    `<path id="coast" fill="none" stroke="#000" stroke-width="${S.coastStroke}" stroke-linejoin="round" stroke-linecap="round" d="${coast}"/>` +
     `<g id="himalayas" fill="none" stroke="#000" stroke-width="${S.mtStroke}" stroke-linejoin="round" stroke-linecap="round">${mountainsSvg()}</g>` +
     `<g id="capitals" stroke-linecap="round" stroke-linejoin="round">${capitalsSvg()}</g></g>` +
     `<rect class="frame" x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#999" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
@@ -343,6 +371,11 @@ function buildPanel() {
       row.innerHTML = `<input id="${key}" type="checkbox"><label for="${key}">${label}</label>`;
       const inp = row.querySelector("input");
       inp.onchange = () => { S[key] = inp.checked; update(); };
+    } else if (type === "color") {
+      row.className = "row";
+      row.innerHTML = `<label for="${key}">${label}</label><input id="${key}" type="color"><span></span>`;
+      const inp = row.querySelector("input");
+      inp.oninput = () => { S[key] = inp.value; update(); };
     } else if (type === "seed") {
       row.className = "seed";
       row.innerHTML = `<label for="${key}">${label}</label><input id="${key}" type="number" min="0" step="1"><button title="換一組">🎲</button>`;

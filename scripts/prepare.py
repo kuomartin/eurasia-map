@@ -1,7 +1,9 @@
 """Export the map's fixed geometry to web/geo.js for the live editor (web/index.html)."""
 import json
+import math
 import shapefile
-from shapely.geometry import shape, Polygon, LineString
+from shapely.geometry import shape, Point, Polygon, LineString
+from shapely.ops import nearest_points
 from build import xy, land_union, CAPITALS, X0, Y0, X1, Y1
 
 NAMES = {  # editor labels
@@ -13,6 +15,10 @@ NAMES = {  # editor labels
     "Medina": "麥地那（阿拉伯）",
 }
 TAIWAN_BOX = (119.9, 21.8, 122.2, 25.4)
+RIVERS = {  # Natural Earth 1:50m river centerlines; each river is split into named reaches (Jinsha, Chang Jiang, ...)
+    "yangtze": lambda p: p.get("name_en") == "Yangtze",
+    "yellow": lambda p: p.get("name") == "Huang" or p.get("name_en") == "Yellow",
+}
 
 def ring(coords):
     return [[round(x, 3), round(y, 3)] for x, y in coords]
@@ -50,6 +56,35 @@ def himalaya_spine(n=60):
             pts.append(xy(lon, (la + lb) / 2))
     return ring(pts)
 
+def chain(lines):
+    """Join a river's reaches into one source-to-mouth polyline (the source is the westernmost end)."""
+    segs = [list(l.coords) for g in lines for l in getattr(g, "geoms", [g]) if l.length > 1e-6]
+    cur = min(segs, key=lambda c: min(c[0][0], c[-1][0]))
+    segs.remove(cur)
+    if cur[-1][0] < cur[0][0]:
+        cur.reverse()
+    while segs:
+        _, i, rev = min([(math.dist(cur[-1], c[0]), i, False) for i, c in enumerate(segs)] +
+                        [(math.dist(cur[-1], c[-1]), i, True) for i, c in enumerate(segs)])
+        c = segs.pop(i)
+        cur += c[::-1] if rev else c
+    return cur
+
+def rivers(land):
+    """Project each river and carry its mouth past the base map's coarse coastline; the editor clips rivers to land."""
+    features = json.load(open("data/rivers50m.geojson"))["features"]
+    out = {}
+    for key, match in RIVERS.items():
+        pts = [xy(lon, lat) for lon, lat in chain([shape(f["geometry"]) for f in features if match(f["properties"])])]
+        mouth = Point(pts[-1])
+        if land.contains(mouth):
+            coast = nearest_points(land.boundary, mouth)[0]
+            dx, dy = coast.x - mouth.x, coast.y - mouth.y
+            d = math.hypot(dx, dy)
+            pts.append((coast.x + dx / d, coast.y + dy / d))
+        out[key] = ring(LineString(pts).simplify(0.05).coords)
+    return out
+
 def main():
     crop = Polygon([(X0, Y0), (X1, Y0), (X1, Y1), (X0, Y1)])
     land = land_union().intersection(crop.buffer(3))
@@ -64,6 +99,7 @@ def main():
         "view": [round(v, 3) for v in (X0, Y0, X1 - X0, Y1 - Y0)],
         "land": polys,
         "spine": himalaya_spine(),
+        "rivers": rivers(land),
         "capitals": [{"id": k, "name": NAMES[k], "xy": [round(c, 3) for c in xy(lon, lat)]} for k, (lat, lon) in CAPITALS.items()],
     }
     with open("web/geo.js", "w") as f:

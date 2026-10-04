@@ -176,9 +176,15 @@ function wobble(pts, step, amp, R) {
   });
 }
 
+function simplifyRing(ring, tol) {  // closed ring (first == last): split at the vertex farthest from the start, simplify both halves
+  const [x0, y0] = ring[0];
+  let m = 1;
+  for (let k = 1; k < ring.length - 1; k++) if (Math.hypot(ring[k][0] - x0, ring[k][1] - y0) > Math.hypot(ring[m][0] - x0, ring[m][1] - y0)) m = k;
+  return simplify(ring.slice(0, m + 1), tol).concat(simplify(ring.slice(m), tol).slice(1, -1));
+}
+
 function strokeRing(ring, tol, step, amp, smooth, R) {
-  let pts = ring.slice(0, -1);
-  pts = simplify(ring, tol).slice(0, -1);
+  let pts = simplifyRing(ring, tol);
   if (pts.length < 3) pts = ring.slice(0, -1);
   return ringD(chaikin(wobble(pts, step, amp, R), smooth));
 }

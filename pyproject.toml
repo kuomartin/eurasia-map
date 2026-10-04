@@ -1,0 +1,8 @@
+[project]
+name = "eurasia-map"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["shapely", "svgelements", "pyshp", "resvg-py"]
+
+[tool.uv]
+package = false

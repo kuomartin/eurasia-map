@@ -68,7 +68,7 @@
 "use strict";
 const DEFAULTS = {
   waterGray: 212, coastStroke: 0.4, simplify: 0.45, wobbleAmp: 0.28, wobbleStep: 0.6, smooth: 2,
-  taiwanSimplify: 0.06, taiwanAmp: 0.05,
+  taiwanSimplify: 0.06, taiwanAmp: 0.05, taiwanStep: 0.25, taiwanSmooth: 2,
   mtCount: 7, mtSize: 2.5, mtBack: true, mtSnow: true, mtClear: 0.4, mtStroke: 0.28,
   capStyle: "dot", dotR: 1.1, ringR: 1.4, capIrregular: 0.08, capStroke: 0.3, capOvershoot: true, capHalo: true,
   seedCoast: 7, seedMountains: 7, seedCapitals: 7,
@@ -97,9 +97,12 @@ const CONTROLS = [
   ["wobbleAmp", "抖動幅度", "range", 0, 0.8, 0.01],
   ["wobbleStep", "抖動間距", "range", 0.2, 2, 0.05],
   ["smooth", "圓滑次數", "range", 0, 4, 1],
-  ["taiwanSimplify", "台灣簡化", "range", 0, 0.5, 0.01],
-  ["taiwanAmp", "台灣抖動", "range", 0, 0.4, 0.01],
   ["waterGray", "水域灰階", "range", 160, 250, 1],
+  ["台灣（獨立於其他海岸線）"],
+  ["taiwanSimplify", "簡化程度", "range", 0, 1.2, 0.01],
+  ["taiwanAmp", "抖動幅度", "range", 0, 0.8, 0.01],
+  ["taiwanStep", "抖動間距", "range", 0.1, 2, 0.05],
+  ["taiwanSmooth", "圓滑次數", "range", 0, 5, 1],
   ["山脈"],
   ["mtCount", "前排座數", "range", 3, 14, 1],
   ["mtSize", "高度", "range", 1, 5, 0.1],
@@ -205,10 +208,10 @@ function coastD() {
   const out = [];
   for (const poly of GEO.land) {
     const R2 = rng(Math.floor(R() * 2 ** 32));  // one stream per polygon
-    const tol = poly.detailed ? S.taiwanSimplify : S.simplify;
-    const amp = poly.detailed ? S.taiwanAmp : S.wobbleAmp;
-    const step = poly.detailed ? Math.min(S.wobbleStep, 0.25) : S.wobbleStep;
-    for (const ring of poly.rings) out.push(strokeRing(ring, tol, step, amp, S.smooth, R2));
+    const t = poly.detailed;
+    const tol = t ? S.taiwanSimplify : S.simplify, amp = t ? S.taiwanAmp : S.wobbleAmp;
+    const step = t ? S.taiwanStep : S.wobbleStep, smooth = t ? S.taiwanSmooth : S.smooth;
+    for (const ring of poly.rings) out.push(strokeRing(ring, tol, step, amp, smooth, R2));
   }
   return out.join("");
 }
